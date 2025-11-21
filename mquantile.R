@@ -62,132 +62,210 @@
 #' \code{\link[MASS]{rlm}},  
 #' \code{\link[MASS]{lqs}},  
 #' \code{\link{quantreg}} (quantile regression).
+library(MASS)
 
-mqlm <- function (x, y, case.weights = rep(1, nrow(x)), var.weights =
-                    rep(1, nrow(x)), ..., w = rep(1, nrow(x)), init = "ls", psi = psi.huber,
-                  scale.est = c("MAD", "Huber", "proposal 2"), k2 = 1.345, method = c("M",
-                                                                                      "MM"), maxit = 20, acc = 1e-04, test.vec = "resid", q = 0.5)
-{
-  irls.delta <- function(old, new) sqrt(sum((old - new)^2)/max(1e-20,
-                                                               sum(old^2)))
+mqlm <- function(x, y,
+                 case.weights = rep(1, nrow(x)),
+                 var.weights  = rep(1, nrow(x)),
+                 ...,
+                 w = rep(1, nrow(x)),
+                 init = "ls",
+                 psi = psi.huber,
+                 scale.est = c("MAD", "Huber", "proposal 2"),
+                 k2 = 1.345,
+                 method = c("M", "MM"),
+                 maxit = 20,
+                 acc = 1e-4,
+                 test.vec = "resid",
+                 q = 0.5) {
+
+  #---------------------------------------------------------------------------
+  # Helper functions
+  #---------------------------------------------------------------------------
+  irls.delta <- function(old, new) {
+    sqrt(sum((old - new)^2) / max(1e-20, sum(old^2)))
+  }
+
   irls.rrxwr <- function(x, w, r) {
-    w <- sqrt(w)
-    max(abs((matrix(r*w,1,length(r)) %*% x)/sqrt(matrix(w,1,length(r)) %*%
-                                                   (x^2))))/sqrt(sum(w*r^2))
+    w_sqrt <- sqrt(w)
+    num <- abs((matrix(r * w_sqrt, 1) %*% x) /
+               sqrt(matrix(w_sqrt, 1) %*% (x^2)))
+    max(num) / sqrt(sum(w * r^2))
   }
+
+  #---------------------------------------------------------------------------
+  # Preprocessing
+  #---------------------------------------------------------------------------
   method <- match.arg(method)
-  nmx <- deparse(substitute(x))
-  if (is.null(dim(x))) {
-    x <- as.matrix(x)
-    colnames(x) <- nmx
+  scale.est <- match.arg(scale.est)
+
+  # Ensure matrix form
+  x <- as.matrix(x)
+  y <- as.numeric(y)
+
+  if (is.null(colnames(x))) {
+    colnames(x) <- paste0("X", seq_len(ncol(x)))
   }
-  else x <- as.matrix(x)
-  if (is.null(colnames(x)))
-    colnames(x) <- paste("X", seq(ncol(x)), sep = "")
-  if (qr(x)$rank < ncol(x))
-    stop("x is singular: singular fits are not implemented in rlm")
-  if (!(any(test.vec == c("resid", "coef", "w", "NULL")) ||
-        is.null(test.vec)))
-    stop("invalid testvec")
-  if (length(var.weights) != nrow(x))
-    stop("Length of var.weights must equal number of observations")
-  if (any(var.weights < 0))
-    stop("Negative var.weights value")
-  if (length(case.weights) != nrow(x))
-    stop("Length of case.weights must equal number of observations")
-  w <- (w * case.weights)/var.weights
+
+  # Rank check
+  if (qr(x)$rank < ncol(x)) {
+    stop("x is singular: singular fits are not implemented in mqlm()")
+  }
+
+  # Validate test.vec
+  if (!(test.vec %in% c("resid", "coef", "w", "NULL") || is.null(test.vec))) {
+    stop("invalid test.vec")
+  }
+
+  # Validate weights
+  n <- nrow(x)
+  if (length(var.weights) != n) stop("'var.weights' must have length n")
+  if (length(case.weights) != n) stop("'case.weights' must have length n")
+  if (any(var.weights < 0)) stop("Negative values in var.weights")
+
+  # Combined weights (unchanged formula)
+  w <- (w * case.weights) / var.weights
+
+  #---------------------------------------------------------------------------
+  # Initial estimation
+  #---------------------------------------------------------------------------
   if (method == "M") {
-    scale.est <- match.arg(scale.est)
-    if (!is.function(psi))
+
+    # Ensure psi is a function
+    if (!is.function(psi)) {
       psi <- get(psi, mode = "function")
-    arguments <- list(...)
-    if (length(arguments)) {
-      pm <- pmatch(names(arguments), names(formals(psi)), nomatch = 0)
-      if (any(pm == 0))
-        warning(paste("some of ... do not match"))
-      pm <- names(arguments)[pm > 0]
-      formals(psi)[pm] <- unlist(arguments[pm])
     }
+
+    # Pass "..." to psi()
+    extra_args <- list(...)
+    if (length(extra_args)) {
+      pm <- pmatch(names(extra_args), names(formals(psi)), nomatch = 0)
+      if (any(pm == 0)) warning("some arguments in ... do not match psi() formals")
+      args_matched <- names(extra_args)[pm > 0]
+      formals(psi)[args_matched] <- unlist(extra_args[args_matched])
+    }
+
+    # Initialize
     if (is.character(init)) {
-      if (init == "ls")
-        temp <- lm.wfit(x, y, w, method = "qr")
-      else if (init == "lts")
+      if (init == "ls") {
+        temp <- lm.wfit(x, y, w)
+      } else if (init == "lts") {
         temp <- lqs(x, y, intercept = TRUE, nsamp = 200)
-      else stop("init method is unknown")
+      } else stop("unknown init method")
+
       coef <- temp$coef
       resid <- temp$resid
-    }
-    else {
-      if (is.list(init))
-        coef <- init$coef
-      else coef <- init
+    } else {
+      if (is.list(init)) coef <- init$coef else coef <- init
       resid <- y - x %*% coef
     }
-  }
-  else if (method == "MM") {
-    scale.est <- "MM"
+
+  } else { # MM-estimator -----------------------------------------------------
+
     temp <- lqs(x, y, intercept = TRUE, method = "S", k0 = 1.548)
     coef <- temp$coef
     resid <- temp$resid
     psi <- psi.bisquare
-    if (length(arguments <- list(...)))
-      if (match("c", names(arguments), nomatch = FALSE)) {
-        c0 <- arguments$c
-        if (c0 > 1.548) {
-          psi$c <- c0
-        }
-        else warning("c must be at least 1.548 and has been ignored")
+
+    # pass c argument
+    extra_args <- list(...)
+    if (length(extra_args) && "c" %in% names(extra_args)) {
+      c0 <- extra_args$c
+      if (c0 > 1.548) {
+        psi$c <- c0
+      } else {
+        warning("c must be >= 1.548 and was ignored")
       }
+    }
+
     scale <- temp$scale
   }
-  else stop("method is unknown")
+
+  #---------------------------------------------------------------------------
+  # IRLS setup
+  #---------------------------------------------------------------------------
   done <- FALSE
-  conv <- NULL
-  n1 <- nrow(x) - ncol(x)
-  if (scale.est != "MM")
-    scale <- mad(resid/sqrt(var.weights), 0)
+  converg <- NULL
+  n_params <- ncol(x) + 1
+
+  if (scale.est != "MM") {
+    scale <- mad(resid / sqrt(var.weights), 0)
+  }
+
+  # constants
   theta <- 2 * pnorm(k2) - 1
   gamma <- theta + k2^2 * (1 - theta) - 2 * k2 * dnorm(k2)
-  qest <- matrix(0, nrow = ncol(x)+1, ncol = length(q))
-  qwt <- matrix(0, nrow = nrow(x), ncol = length(q))
-  qfit <- matrix(0, nrow = nrow(x), ncol = length(q))
-  qres <- matrix(0, nrow = nrow(x), ncol = length(q))
-  for(i in 1:length(q)) {
-    for (iiter in 1:maxit) {
-      if (!is.null(test.vec))
-        testpv <- get(test.vec)
+
+  # Allocate outputs (same structure as original)
+  Q <- length(q)
+  coef_mat <- matrix(0, n_params, Q)
+  w_mat    <- matrix(0, n, Q)
+  fit_mat  <- matrix(0, n, Q)
+  res_mat  <- matrix(0, n, Q)
+
+  #---------------------------------------------------------------------------
+  # Main loop over quantiles
+  #---------------------------------------------------------------------------
+  for (qi in seq_len(Q)) {
+
+    for (it in seq_len(maxit)) {
+
+      test_prev <- if (!is.null(test.vec)) get(test.vec) else NULL
+
+      # scale update
       if (scale.est != "MM") {
-        if (scale.est == "MAD")
-          scale <- median(abs(resid/sqrt(var.weights)))/0.6745
-        else scale <- sqrt(sum(pmin(resid^2/var.weights,(k2*scale)^2))/(n1*gamma))
+        if (scale.est == "MAD") {
+          scale <- median(abs(resid / sqrt(var.weights))) / 0.6745
+        } else {
+          scale <- sqrt(sum(pmin(resid^2 / var.weights, (k2 * scale)^2)) /
+                         ((n - ncol(x)) * gamma))
+        }
         if (scale == 0) {
           done <- TRUE
           break
         }
       }
-      w <- psi(resid/(scale * sqrt(var.weights))) * case.weights
-      ww <- 2 * (1 - q[i]) * w
-      ww[resid > 0] <- 2 * q[i] * w[resid > 0]
-      w <- ww
-      #cbind(1,x)
-      temp <- lm.wfit(cbind(1,x), y, w, method = "qr")
+
+      # compute psi weights
+      w <- psi(resid / (scale * sqrt(var.weights))) * case.weights
+
+      # asymmetric quantile weighting
+      adj <- ifelse(resid > 0, 2 * q[qi], 2 * (1 - q[qi]))
+      w <- w * adj
+
+      # weighted LS step
+      temp <- lm.wfit(cbind(1, x), y, w)
       coef <- temp$coef
       resid <- temp$residuals
-      if (!is.null(test.vec))
-        convi <- irls.delta(testpv, get(test.vec))
-      else convi <- irls.rrxwr(x, wmod, resid)
-      conv <- c(conv, convi)
-      done <- (convi <= acc)
-      if (done)
-        break
+
+      # convergence check
+      if (!is.null(test.vec)) {
+        conv_i <- irls.delta(test_prev, get(test.vec))
+      } else {
+        conv_i <- irls.rrxwr(x, w, resid)
+      }
+
+      converg <- c(converg, conv_i)
+      done <- (conv_i <= acc)
+      if (done) break
     }
-    if (!done)
-      warning(paste("rlm failed to converge in", maxit, "steps at q = ", q[i]))
-    qest[, i] <- coef
-    qwt[, i] <- w
-    qfit[, i] <- temp$fitted.values
-    qres[,i] <- resid
+
+    if (!done) {
+      warning("mqlm did not converge at q = ", q[qi])
+    }
+
+    coef_mat[, qi] <- coef
+    w_mat[, qi]    <- w
+    fit_mat[, qi]  <- temp$fitted.values
+    res_mat[, qi]  <- resid
   }
-  list(fitted.values = qfit, residuals = qres, q.values = q, q.weights = qwt,
-       coefficients = qest)
+
+  list(
+    fitted.values = fit_mat,
+    residuals     = res_mat,
+    q.values      = q,
+    q.weights     = w_mat,
+    coefficients  = coef_mat
+  )
 }
+

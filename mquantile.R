@@ -1,25 +1,67 @@
-#' M-Quantile Regression Function
-#' Description: This function fits M-quantile regression models using iterative reweighted least squares (IRLS).
-#'              It supports various weighting schemes, robustness options, and quantile estimation.
+#' M-Quantile Regression via Iteratively Reweighted Least Squares (IRLS)
 #'
-#' @author: Patrick Ferreira Patrocinio
-#' Parameters:
-#' @param x	Design matrix (predictors).
-#' @param y	Response variable.
-#' @param q	Quantile(s) to estimate (e.g., 0.5 for median).
-#' @param psi	Influence function (psi.huber (default) or psi.bisquare).
-#' @param scale.est	Scale estimator ("MAD", "Huber", or "proposal 2").
-#' @param case.weights	Observation weights (default: equal weights).
-#' @param var.weights	Variance weights (default: equal weights).
-#' @param maxit	Maximum iterations for IRLS (default: 20).
-#' @param acc	Convergence tolerance (default: 1e-4).
-
-
-#' Returns:
-#'   A list containing fitted values, residuals, quantile estimates, weights, and coefficients
+#' Fits M-quantile regression models using the robust framework of
+#' iteratively reweighted least squares (IRLS).  
+#' The approach generalizes classical quantile regression by incorporating
+#' robustness weights derived from an influence function (e.g., Huber or
+#' bisquare), enabling estimation of conditional M-quantiles for heavy-tailed
+#' or contaminated data.
 #'
-# Dependencies: 
-#' @import MASS (for lm.wfit and lqs functions)
+#' @details
+#' For each quantile level \eqn{q}, the algorithm performs a fixed-point iteration:
+#' \deqn{
+#'   \hat{\beta}^{(k+1)} =
+#'     \arg\min_\beta \sum_{t=1}^n w_t^{(k)} (y_t - x_t^\top \beta)^2,
+#' }
+#' where the weights \eqn{w_t^{(k)}} depend on an influence function
+#' \eqn{\psi}, a specified scale estimator, and the sign of the residuals to
+#' encode quantile asymmetry.
+#'
+#' Supported features include:
+#' * Huber or bisquare influence functions  
+#' * MAD, Huber, or Proposal–2 scale estimators  
+#' * Case weights and variance weights  
+#' * M- and MM-estimation  
+#' * Multiple quantile levels  
+#'
+#'
+#' @param x A numeric design matrix of predictors.
+#' @param y Numeric response vector.
+#' @param q A numeric vector of quantile levels in \eqn{(0,1)} (e.g., `0.5` for median).
+#' @param psi Influence function used in robustification.
+#'   Default: `psi.huber`. Alternative: `psi.bisquare`.
+#' @param scale.est Scale estimator to use. One of:
+#'   * `"MAD"`  
+#'   * `"Huber"`  
+#'   * `"proposal 2"`  
+#' @param case.weights Observation-level weights. Defaults to equal weights.
+#' @param var.weights Variance weights. Defaults to equal weights.
+#' @param maxit Maximum number of IRLS iterations (default: `20`).
+#' @param acc Convergence tolerance for IRLS updates (default: `1e-4`).
+#' @param init Initial estimator: `"ls"` (default), `"lts"`, or a vector/list of coefficients.
+#' @param method Estimation method. `"M"` (default) or `"MM"`.
+#' @param k2 Tuning constant for Huber-type scale estimators (default: `1.345`).
+#' @param test.vec Convergence diagnostic type (`"resid"`, `"coef"`, `"w"`, or `"NULL"`).
+#' @param ... Additional arguments passed to the influence function.
+#'
+#' @return A list with the following elements:
+#' \item{fitted.values}{Matrix of fitted values for each quantile level.}
+#' \item{residuals}{Matrix of residuals for each quantile level.}
+#' \item{q.values}{Quantile levels used in the estimation.}
+#' \item{q.weights}{Matrix of final IRLS weights for each quantile.}
+#' \item{coefficients}{Matrix of estimated regression coefficients for each quantile level.}
+#'
+#' @author Patrick Ferreira Patrocinio
+#'
+#' @import MASS
+#'
+#' @references
+#' Breckling, J. & Chambers, R. (1988). *M-quantiles*. Biometrika, 75, 761–771.
+#'
+#' @seealso
+#' \code{\link[MASS]{rlm}},  
+#' \code{\link[MASS]{lqs}},  
+#' \code{\link{quantreg}} (quantile regression).
 
 mqlm <- function (x, y, case.weights = rep(1, nrow(x)), var.weights =
                     rep(1, nrow(x)), ..., w = rep(1, nrow(x)), init = "ls", psi = psi.huber,
